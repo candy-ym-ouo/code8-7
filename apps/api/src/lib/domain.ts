@@ -86,3 +86,54 @@ export function isRestoreWindowOpen(deletedAt: Date | null, now = new Date()): b
 export function isStrictlyEditable(editableUntil: Date, now = new Date()): boolean {
   return now.getTime() <= editableUntil.getTime();
 }
+
+export interface ReflectionDeletionState {
+  /** 删除完成感受后，书目是否应从“已读完”退回“阅读中”。 */
+  bookGoesReading: boolean;
+}
+
+/**
+ * 删除一条完成感受后的书目状态决策。
+ *
+ * 不变量：书目处于 READ 时，必须存在至少一条有效完成感受，且其最大轮次
+ * 与“最后一次读完”相对应。只有被删的是当前最大的有效轮次时才退回 READING。
+ */
+export function resolveReflectionDeletion(input: {
+  bookStatus: BookStatus;
+  deletedRound: number;
+  activeMaxRoundAfterDelete: number;
+}): ReflectionDeletionState {
+  return {
+    bookGoesReading:
+      input.bookStatus === 'READ' && input.activeMaxRoundAfterDelete < input.deletedRound
+  };
+}
+
+export interface ReflectionUndeletionState {
+  /** 恢复后书目需要切换到的状态；为 null 表示保持原状态。 */
+  nextBookStatus: BookStatus | null;
+}
+
+/**
+ * 恢复（取消删除 / 历史版本回滚）一条完成感受后的书目状态决策。
+ *
+ * - 恢复的轮次成为新的最大有效轮次，且书目在 READING：书随最后一次读完回到 READ；
+ * - 恢复的只是较旧的轮次（已有更新的有效轮次）：状态不动；
+ * - 已经是 READ：状态不动；
+ * - PAUSED（搁置后恢复旧感受）：状态不动，READ 与 PAUSED 之间不允许直接跳转；
+ * - TO_READ / ABANDONED 与“存在读完感受”矛盾，拒绝恢复，由调用方报冲突。
+ */
+export function resolveReflectionUndeletion(input: {
+  bookStatus: BookStatus;
+  restoredRound: number;
+  activeMaxRoundBeforeRestore: number;
+}): ReflectionUndeletionState {
+  if (input.bookStatus === 'TO_READ' || input.bookStatus === 'ABANDONED') {
+    throw new AppError(409, 'RESTORE_CONFLICT', '书目当前状态不允许恢复完成感受');
+  }
+  const becomesLatest = input.restoredRound > input.activeMaxRoundBeforeRestore;
+  if (input.bookStatus === 'READING' && becomesLatest) {
+    return { nextBookStatus: 'READ' };
+  }
+  return { nextBookStatus: null };
+}

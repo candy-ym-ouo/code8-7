@@ -7,6 +7,8 @@ import type {
   MoodTag,
   Pagination,
   Reflection,
+  ReflectionRevision,
+  ReflectionRevisionDiff,
   RereadMark,
   TimelineEvent,
   Trace,
@@ -47,7 +49,10 @@ export const booksApi = {
   delete: (id: string, version: number) => api.delete<void>(`/books/${id}`, { version }),
   traces: (id: string, params: URLSearchParams) =>
     api.get<{ items: Trace[]; pagination: Pagination }>(`/books/${id}/traces?${params}`),
-  reflections: (id: string) => api.get<{ items: Reflection[] }>(`/books/${id}/reflections`)
+  reflections: (id: string, includeDeleted = false) =>
+    api.get<{ items: Reflection[] }>(
+      `/books/${id}/reflections${includeDeleted ? '?includeDeleted=true' : ''}`
+    )
 };
 
 export const traceApi = {
@@ -77,7 +82,17 @@ export const reflectionApi = {
   update: (id: string, body: { moodTags: MoodTag[]; text: string; version: number }) =>
     api.patch<{ reflection: Reflection }>(`/reflections/${id}`, body),
   delete: (id: string, version: number) => api.delete<void>(`/reflections/${id}`, { version }),
-  restore: (id: string) => api.post<{ reflection: Reflection }>(`/reflections/${id}/restore`)
+  restore: (id: string) => api.post<{ reflection: Reflection }>(`/reflections/${id}/restore`),
+  revisions: (id: string) =>
+    api.get<{ reflection: Reflection; editable: boolean; items: ReflectionRevision[] }>(
+      `/reflections/${id}/revisions`
+    ),
+  revisionDiff: (id: string, from: string, to: string) =>
+    api.get<ReflectionRevisionDiff>(
+      `/reflections/${id}/revisions/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+    ),
+  restoreRevision: (id: string, revisionId: string, version: number) =>
+    api.post<{ reflection: Reflection }>(`/reflections/${id}/revisions/${revisionId}/restore`, { version })
 };
 
 export const timelineApi = {

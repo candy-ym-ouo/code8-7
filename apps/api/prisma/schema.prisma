@@ -47,6 +47,15 @@ enum ActivityAction {
   RESTORED
   STATUS_CHANGED
   COMPLETED
+  REVISION_RESTORED
+}
+
+enum RevisionAction {
+  INITIAL
+  UPDATED
+  DELETED
+  RESTORED
+  VERSION_RESTORED
 }
 
 model User {
@@ -64,6 +73,7 @@ model User {
   annotations       Annotation[]
   rereadMarks       RereadMark[]
   reflections       CompletionReflection[]
+  reflectionRevisions ReflectionRevision[]
   activityEvents    ActivityEvent[]
 
   @@map("users")
@@ -103,6 +113,7 @@ model Book {
   annotations   Annotation[]
   rereadMarks   RereadMark[]
   reflections   CompletionReflection[]
+  reflectionRevisions ReflectionRevision[]
   activityEvents ActivityEvent[]
 
   @@index([userId, deletedAt, updatedAt])
@@ -186,9 +197,32 @@ model CompletionReflection {
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
   book Book @relation(fields: [bookId], references: [id], onDelete: Restrict)
 
+  revisions ReflectionRevision[]
+
   @@index([userId, deletedAt, completedAt])
   @@index([bookId, completionRound, deletedAt])
   @@map("completion_reflections")
+}
+
+model ReflectionRevision {
+  id           String         @id @default(uuid()) @db.Uuid
+  userId       String         @map("user_id") @db.Uuid
+  bookId       String         @map("book_id") @db.Uuid
+  reflectionId String         @map("reflection_id") @db.Uuid
+  revisionNo   Int            @map("revision_no")
+  action       RevisionAction
+  moodTags     MoodTag[]      @map("mood_tags")
+  reflection   String?
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user       User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  book       Book                 @relation(fields: [bookId], references: [id], onDelete: Restrict)
+  reflection CompletionReflection @relation(fields: [reflectionId], references: [id], onDelete: Restrict)
+
+  @@unique([reflectionId, revisionNo])
+  @@index([userId, createdAt])
+  @@index([bookId, reflectionId, revisionNo])
+  @@map("reflection_revisions")
 }
 
 model ActivityEvent {

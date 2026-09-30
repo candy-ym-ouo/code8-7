@@ -1,6 +1,13 @@
-import type { ActivityAction, ActivityEntityType, BookStatus, MoodTag, TraceType } from '@paper-book-traces/shared';
+import type {
+  ActivityAction,
+  ActivityEntityType,
+  BookStatus,
+  MoodTag,
+  RevisionAction,
+  TraceType
+} from '@paper-book-traces/shared';
 
-export type { ActivityAction, ActivityEntityType, BookStatus, MoodTag, TraceType };
+export type { ActivityAction, ActivityEntityType, BookStatus, MoodTag, RevisionAction, TraceType };
 
 export interface User {
   id: string;
@@ -80,6 +87,40 @@ export interface Reflection {
   version: number;
   createdAt: string;
   updatedAt: string;
+  deleted?: boolean;
+  restorable?: boolean;
+}
+
+export interface ReflectionRevision {
+  id: string;
+  reflectionId: string;
+  bookId: string;
+  revisionNo: number;
+  action: RevisionAction;
+  actionLabel: string;
+  moodTags: MoodTag[];
+  text: string;
+  createdAt: string;
+}
+
+export type DiffOp = 'EQUAL' | 'ADDED' | 'REMOVED';
+
+export interface DiffSegment {
+  op: DiffOp;
+  text: string;
+}
+
+export interface MoodTagDiff {
+  added: MoodTag[];
+  removed: MoodTag[];
+  unchanged: MoodTag[];
+}
+
+export interface ReflectionRevisionDiff {
+  from: ReflectionRevision;
+  to: ReflectionRevision;
+  textDiff: DiffSegment[];
+  moodTagDiff: MoodTagDiff;
 }
 
 export interface TimelineEvent {
@@ -131,7 +172,8 @@ export const ACTION_LABELS: Record<ActivityAction, string> = {
   DELETED: '删除',
   RESTORED: '恢复',
   STATUS_CHANGED: '状态变化',
-  COMPLETED: '读完'
+  COMPLETED: '读完',
+  REVISION_RESTORED: '恢复历史版本'
 };
 
 export const ENTITY_LABELS: Record<ActivityEntityType, string> = {

@@ -6,6 +6,7 @@ import { booksApi, reflectionApi, traceApi } from '../api';
 import { formatDate, formatDateTime } from '../api/format';
 import ErrorNotice from '../components/ErrorNotice.vue';
 import MoodPicker from '../components/MoodPicker.vue';
+import ReflectionHistory from '../components/ReflectionHistory.vue';
 import {
   ACTION_LABELS,
   ENTITY_LABELS,
@@ -31,6 +32,8 @@ const book = ref<Book | null>(null);
 const bookView = computed(() => book.value as Book);
 const traces = ref<Trace[]>([]);
 const reflections = ref<Reflection[]>([]);
+const activeReflections = computed(() => reflections.value.filter((reflection) => !reflection.deleted));
+const deletedReflections = computed(() => reflections.value.filter((reflection) => reflection.deleted));
 const activities = ref<Array<{ id: string; action: keyof typeof ACTION_LABELS; entityType: keyof typeof ENTITY_LABELS; payload: Record<string, unknown>; occurredAt: string }>>([]);
 const loading = ref(true);
 const saving = ref(false);
@@ -59,7 +62,7 @@ const tabs = computed(() => [
   { value: 'DOG_EAR' as const, label: `折角 ${book.value?.traceSummary.dogEars ?? 0}` },
   { value: 'ANNOTATION' as const, label: `批注 ${book.value?.traceSummary.annotations ?? 0}` },
   { value: 'REREAD_MARK' as const, label: `重读 ${book.value?.traceSummary.rereadMarks ?? 0}` },
-  { value: 'REFLECTIONS' as const, label: `读完感受 ${reflections.value.length}` },
+  { value: 'REFLECTIONS' as const, label: `读完感受 ${activeReflections.value.length}${deletedReflections.value.length ? `（${deletedReflections.value.length} 条已删除）` : ''}` },
   { value: 'TIMELINE' as const, label: '本书时间线' }
 ]);
 
@@ -123,7 +126,7 @@ async function load(): Promise<void> {
     const [bookResult, loadedTraces, reflectionResult, timelineResult] = await Promise.all([
       booksApi.get(bookId.value),
       loadAllTraces(bookId.value),
-      booksApi.reflections(bookId.value),
+      booksApi.reflections(bookId.value, true),
       timelineApi.list(new URLSearchParams({ bookId: bookId.value, pageSize: '100' }))
     ]);
     book.value = bookResult.book;
@@ -249,6 +252,8 @@ async function restoreLastDeleted(): Promise<void> {
     await load();
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '恢复失败';
+    lastDeleted.value = null;
+    await load();
   }
 }
 
@@ -322,24 +327,47 @@ async function saveReflection(): Promise<void> {
       version: reflectionEdit.value.version
     });
     reflectionEdit.value = null;
-    success.value = '完成感受已修订，旧版本仍保留在时间线中';
+    success.value = '完成感受已修订，旧版本仍保留在修订历史中';
     await load();
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '修订失败';
+    if (caught instanceof ApiError && caught.status === 409) {
+      error.value = `${caught.message}。页面内容已自动刷新，请确认后再保存。`;
+      reflectionEdit.value = null;
+      await load();
+    } else {
+      error.value = caught instanceof ApiError ? caught.message : '修订失败';
+    }
   } finally {
     saving.value = false;
   }
 }
 
 async function deleteReflection(reflection: Reflection): Promise<void> {
-  if (!window.confirm('删除这次完成感受后，书目会回到“阅读中”。确定继续吗？')) return;
+  if (!window.confirm('删除这次完成感受后，书目会回到“阅读中”。7 天内可从修订历史中撤销。确定继续吗？')) return;
   try {
     await reflectionApi.delete(reflection.id, reflection.version);
     lastDeleted.value = { kind: 'REFLECTION', id: reflection.id, label: `第 ${reflection.completionRound} 次读完感受` };
-    success.value = '完成感受已删除，可撤销';
+    success.value = '完成感受已删除，可在 7 天编辑期内撤销';
     await load();
   } catch (caught) {
-    error.value = caught instanceof ApiError ? caught.message : '删除失败';
+    if (caught instanceof ApiError && caught.status === 409) {
+      error.value = `${caught.message}。页面内容已自动刷新。`;
+      await load();
+    } else {
+      error.value = caught instanceof ApiError ? caught.message : '删除失败';
+    }
+  }
+}
+
+async function restoreDeletedReflection(reflection: Reflection): Promise<void> {
+  error.value = '';
+  try {
+    await reflectionApi.restore(reflection.id);
+    success.value = '完成感受已恢复，书目状态已与读完轮次同步';
+    await load();
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : '恢复失败';
+    await load();
   }
 }
 
@@ -362,6 +390,7 @@ function eventSummary(payload: Record<string, unknown>): string {
   }
   if (Array.isArray(payload.moodTags)) return payload.moodTags.map((tag) => MOOD_LABELS[tag as MoodTag] ?? tag).join('、');
   if (payload.cascade) return '随书目删除';
+  if (typeof payload.fromRevisionNo === 'number') return `恢复为第 ${payload.fromRevisionNo} 版内容`;
   return '';
 }
 
@@ -492,7 +521,7 @@ onMounted(load);
       </div>
 
       <div v-if="activeTab === 'REFLECTIONS'" class="trace-list">
-        <article v-for="reflection in reflections" :key="reflection.id" class="trace-card">
+        <article v-for="reflection in activeReflections" :key="reflection.id" class="trace-card">
           <div class="trace-card-heading">
             <div>
               <span class="trace-type">第 {{ reflection.completionRound }} 次读完</span>
@@ -507,7 +536,9 @@ onMounted(load);
             <span v-for="tag in reflection.moodTags" :key="tag" class="mood-chip selected">{{ MOOD_LABELS[tag] }}</span>
           </div>
           <p class="preserve-text">{{ reflection.text || '当时没有写下更多文字。' }}</p>
-          <p class="muted">可编辑至 {{ formatDateTime(reflection.editableUntil) }}</p>
+          <p class="muted">
+            {{ canEditReflection(reflection) ? `可编辑至 ${formatDateTime(reflection.editableUntil)}` : '7 天编辑期已过，内容只读，仍可查看修订历史' }}
+          </p>
           <form v-if="reflectionEdit?.id === reflection.id" class="inline-editor" @submit.prevent="saveReflection">
             <MoodPicker v-model="reflectionEdit.moodTags" />
             <label>感受<textarea v-model="reflectionEdit.text" rows="4" maxlength="5000" /></label>
@@ -516,8 +547,37 @@ onMounted(load);
               <button class="button button-primary" type="submit" :disabled="saving">保存修订</button>
             </div>
           </form>
+          <ReflectionHistory
+            :reflection="reflection"
+            :editable="canEditReflection(reflection)"
+            @restored="load()"
+            @notify="(message) => { success = message; }"
+            @failed="(message) => { error = message; }"
+          />
         </article>
-        <p v-if="reflections.length === 0" class="empty-inline">还没有读完后留下的感受。</p>
+        <p v-if="activeReflections.length === 0" class="empty-inline">还没有读完后留下的感受。</p>
+
+        <section v-if="deletedReflections.length > 0" class="deleted-reflections">
+          <h3>已删除的完成感受</h3>
+          <article v-for="reflection in deletedReflections" :key="`deleted-${reflection.id}`" class="trace-card trace-card-deleted">
+            <div class="trace-card-heading">
+              <div>
+                <span class="trace-type">第 {{ reflection.completionRound }} 次读完 · 已删除</span>
+                <strong>{{ formatDate(reflection.completedAt) }}</strong>
+              </div>
+              <div v-if="reflection.restorable" class="button-row">
+                <button class="text-button" type="button" @click="restoreDeletedReflection(reflection)">撤销删除</button>
+              </div>
+            </div>
+            <div class="mood-list">
+              <span v-for="tag in reflection.moodTags" :key="tag" class="mood-chip selected">{{ MOOD_LABELS[tag] }}</span>
+            </div>
+            <p class="preserve-text">{{ reflection.text || '当时没有写下更多文字。' }}</p>
+            <p class="muted">
+              {{ reflection.restorable ? `可在编辑期内撤销（截至 ${formatDateTime(reflection.editableUntil)}）` : '7 天编辑期已过，删除不可撤销，仅保留只读历史' }}
+            </p>
+          </article>
+        </section>
       </div>
 
       <div v-else-if="activeTab === 'TIMELINE'" class="timeline-list">

@@ -699,6 +699,21 @@ small,
   padding: 1rem;
 }
 
+.deleted-reflections {
+  margin-top: 1.2rem;
+  opacity: 0.85;
+}
+
+.deleted-reflections h3 {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+}
+
+.trace-card-deleted {
+  background: #f6f4ef;
+  border-style: dashed;
+}
+
 .trace-type {
   display: inline-block;
   margin-right: 0.55rem;

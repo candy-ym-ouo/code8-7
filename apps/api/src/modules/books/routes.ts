@@ -388,7 +388,7 @@ export const bookRoutes: FastifyPluginAsync = async (app) => {
           });
         }
         const latest = await tx.completionReflection.aggregate({
-          where: { bookId },
+          where: { bookId, userId, deletedAt: null },
           _max: { completionRound: true }
         });
         const completionRound = (latest._max.completionRound ?? 0) + 1;
@@ -402,6 +402,18 @@ export const bookRoutes: FastifyPluginAsync = async (app) => {
             reflection: parsed.data.reflection.text ? normalizeText(parsed.data.reflection.text) : null,
             completedAt,
             editableUntil: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+            createdAt: now
+          }
+        });
+        await tx.reflectionRevision.create({
+          data: {
+            userId,
+            bookId,
+            reflectionId: reflection.id,
+            revisionNo: 1,
+            action: 'INITIAL',
+            moodTags,
+            reflection: reflection.reflection,
             createdAt: now
           }
         });
