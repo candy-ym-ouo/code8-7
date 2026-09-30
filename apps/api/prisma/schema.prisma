@@ -47,6 +47,13 @@ enum ActivityAction {
   RESTORED
   STATUS_CHANGED
   COMPLETED
+  REVISION_RESTORED
+}
+
+enum ReflectionRevisionKind {
+  INITIAL
+  UPDATED
+  RESTORED_HISTORY
 }
 
 model User {
@@ -64,6 +71,7 @@ model User {
   annotations       Annotation[]
   rereadMarks       RereadMark[]
   reflections       CompletionReflection[]
+  reflectionRevisions CompletionReflectionRevision[]
   activityEvents    ActivityEvent[]
 
   @@map("users")
@@ -101,8 +109,9 @@ model Book {
   user          User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
   dogEars       DogEar[]
   annotations   Annotation[]
-  rereadMarks   RereadMark[]
-  reflections   CompletionReflection[]
+  rereadMarks    RereadMark[]
+  reflections    CompletionReflection[]
+  reflectionRevisions CompletionReflectionRevision[]
   activityEvents ActivityEvent[]
 
   @@index([userId, deletedAt, updatedAt])
@@ -185,10 +194,33 @@ model CompletionReflection {
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
   book Book @relation(fields: [bookId], references: [id], onDelete: Restrict)
+  revisions CompletionReflectionRevision[] @relation("ReflectionRevisions")
 
   @@index([userId, deletedAt, completedAt])
   @@index([bookId, completionRound, deletedAt])
   @@map("completion_reflections")
+}
+
+model CompletionReflectionRevision {
+  id           String                    @id @default(uuid()) @db.Uuid
+  userId       String                    @map("user_id") @db.Uuid
+  reflectionId String                    @map("reflection_id") @db.Uuid
+  bookId       String                    @map("book_id") @db.Uuid
+  revisionNumber Int                      @map("revision_number")
+  kind         ReflectionRevisionKind
+  moodTags     MoodTag[]                 @map("mood_tags")
+  reflection   String?
+  version      Int
+  restoredFromRevision Int?              @map("restored_from_revision")
+  createdAt    DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user   User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  book   Book                 @relation(fields: [bookId], references: [id], onDelete: Restrict)
+  parent CompletionReflection @relation("ReflectionRevisions", fields: [reflectionId], references: [id], onDelete: Restrict)
+
+  @@unique([reflectionId, revisionNumber])
+  @@index([userId, createdAt])
+  @@map("completion_reflection_revisions")
 }
 
 model ActivityEvent {

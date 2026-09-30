@@ -79,10 +79,26 @@ export function normalizeMoodTags(tags: MoodTag[]): MoodTag[] {
   return unique;
 }
 
+export const REFLECTION_EDIT_WINDOW_DAYS = 7;
+
+export function reflectionEditWindow(now: Date = new Date()): Date {
+  return new Date(now.getTime() + REFLECTION_EDIT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+}
+
 export function isRestoreWindowOpen(deletedAt: Date | null, now = new Date()): boolean {
   return Boolean(deletedAt && now.getTime() - deletedAt.getTime() <= 24 * 60 * 60 * 1000);
 }
 
 export function isStrictlyEditable(editableUntil: Date, now = new Date()): boolean {
   return now.getTime() <= editableUntil.getTime();
+}
+
+/**
+ * 恢复一条（软删除的）读完感受后书目应当处于的状态。
+ * 只有“被恢复的是最新一轮”才允许恢复，此时书目必须回到 READ；
+ * 存在更新的未删除轮次时不允许恢复（由调用方先拒绝），避免轮次错配。
+ * completionRound 永远不变，轮次不因删除/恢复重排。
+ */
+export function expectedBookStatusOnRestore(isLatestActiveRound: boolean): BookStatus | null {
+  return isLatestActiveRound ? 'READ' : null;
 }

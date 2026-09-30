@@ -10,19 +10,30 @@ import {
   ACTION_LABELS,
   ENTITY_LABELS,
   MOOD_LABELS,
+  REVISION_KIND_LABELS,
   STATUS_LABELS,
   TRACE_LABELS,
   type Book,
   type BookStatus,
   type MoodTag,
   type Reflection,
+  type ReflectionRevision,
   type Trace,
   type TraceType
 } from '../types/domain';
 import { timelineApi } from '../api';
+import { diffLines, diffMoodTags, type DiffRow } from '../lib/revisions';
 
 type DeletedItem = { kind: 'DOG_EAR' | 'ANNOTATION' | 'REREAD_MARK' | 'REFLECTION'; id: string; label: string };
 type ReflectionEdit = { id: string; version: number; moodTags: MoodTag[]; text: string };
+type RevisionState = {
+  items: ReflectionRevision[];
+  editableUntil: string;
+  currentVersion: number;
+  loading: boolean;
+  fromRevision: number;
+  toRevision: number;
+};
 
 const route = useRoute();
 const router = useRouter();
@@ -41,6 +52,7 @@ const createType = ref<TraceType | null>(null);
 const editing = ref<Trace | null>(null);
 const showCompleteForm = ref(false);
 const reflectionEdit = ref<ReflectionEdit | null>(null);
+const revisionPanels = ref<Record<string, RevisionState>>({});
 const lastDeleted = ref<DeletedItem | null>(null);
 const traceForm = reactive({
   pageNumber: '',
@@ -322,10 +334,107 @@ async function saveReflection(): Promise<void> {
       version: reflectionEdit.value.version
     });
     reflectionEdit.value = null;
-    success.value = '完成感受已修订，旧版本仍保留在时间线中';
+    success.value = '完成感受已修订，旧版本保留在历史中可对比与恢复';
     await load();
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : '修订失败';
+  } finally {
+    saving.value = false;
+  }
+}
+
+function revisionPanel(reflectionId: string): RevisionState | undefined {
+  return revisionPanels.value[reflectionId];
+}
+
+function revisionLabel(revision: ReflectionRevision): string {
+  const base = `第 ${revision.revisionNumber} 版 · ${REVISION_KIND_LABELS[revision.kind]}`;
+  return revision.restoredFromRevision ? `${base}（来自第 ${revision.restoredFromRevision} 版）` : base;
+}
+
+async function toggleRevisions(reflection: Reflection): Promise<void> {
+  error.value = '';
+  if (revisionPanels.value[reflection.id]) {
+    delete revisionPanels.value[reflection.id];
+    revisionPanels.value = { ...revisionPanels.value };
+    return;
+  }
+  revisionPanels.value = {
+    ...revisionPanels.value,
+    [reflection.id]: {
+      items: [],
+      editableUntil: reflection.editableUntil,
+      currentVersion: reflection.version,
+      loading: true,
+      fromRevision: 1,
+      toRevision: 1
+    }
+  };
+  try {
+    const result = await reflectionApi.revisions(reflection.id);
+    const newest = result.items[0]?.revisionNumber ?? 1;
+    revisionPanels.value = {
+      ...revisionPanels.value,
+      [reflection.id]: {
+        items: result.items,
+        editableUntil: result.editableUntil,
+        currentVersion: result.currentVersion,
+        loading: false,
+        fromRevision: Math.max(1, newest - 1),
+        toRevision: newest
+      }
+    };
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : '修订历史加载失败';
+    delete revisionPanels.value[reflection.id];
+    revisionPanels.value = { ...revisionPanels.value };
+  }
+}
+
+function findRevision(panel: RevisionState, number: number): ReflectionRevision | undefined {
+  return panel.items.find((item) => item.revisionNumber === number);
+}
+
+function compareMoodDiff(panel: RevisionState) {
+  const from = findRevision(panel, panel.fromRevision);
+  const to = findRevision(panel, panel.toRevision);
+  if (!from || !to) return { added: [] as MoodTag[], removed: [] as MoodTag[] };
+  return diffMoodTags(from.moodTags, to.moodTags);
+}
+
+function compareTextRows(panel: RevisionState): DiffRow[] {
+  const from = findRevision(panel, panel.fromRevision);
+  const to = findRevision(panel, panel.toRevision);
+  if (!from || !to) return [];
+  return diffLines(from.text, to.text);
+}
+
+function canRestoreRevision(reflection: Reflection, revision: ReflectionRevision): boolean {
+  const newest = revisionPanels.value[reflection.id]?.items[0]?.revisionNumber;
+  return canEditReflection(reflection) && revision.revisionNumber !== newest;
+}
+
+async function restoreRevision(reflection: Reflection, revisionNumber: number): Promise<void> {
+  if (!window.confirm(`将第 ${revisionNumber} 版恢复为当前内容？当前内容会另存为新版本，不会被覆盖。`)) {
+    return;
+  }
+  saving.value = true;
+  error.value = '';
+  try {
+    await reflectionApi.restoreRevision(reflection.id, {
+      revisionNumber,
+      version: reflection.version
+    });
+    success.value = '历史修订已恢复为当前内容';
+    await load();
+    const refreshed = reflections.value.find((item) => item.id === reflection.id);
+    if (refreshed) {
+      delete revisionPanels.value[reflection.id];
+      revisionPanels.value = { ...revisionPanels.value };
+      await toggleRevisions(refreshed);
+    }
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : '恢复历史修订失败';
   } finally {
     saving.value = false;
   }
@@ -507,7 +616,15 @@ onMounted(load);
             <span v-for="tag in reflection.moodTags" :key="tag" class="mood-chip selected">{{ MOOD_LABELS[tag] }}</span>
           </div>
           <p class="preserve-text">{{ reflection.text || '当时没有写下更多文字。' }}</p>
-          <p class="muted">可编辑至 {{ formatDateTime(reflection.editableUntil) }}</p>
+          <p class="muted">
+            <template v-if="canEditReflection(reflection)">可编辑至 {{ formatDateTime(reflection.editableUntil) }}</template>
+            <template v-else>已超过 7 天可编辑期，仅可只读查看与对比历史</template>
+          </p>
+          <div class="button-row">
+            <button class="text-button" type="button" @click="toggleRevisions(reflection)">
+              {{ revisionPanel(reflection.id) ? '收起修订历史' : '查看修订历史与对比' }}
+            </button>
+          </div>
           <form v-if="reflectionEdit?.id === reflection.id" class="inline-editor" @submit.prevent="saveReflection">
             <MoodPicker v-model="reflectionEdit.moodTags" />
             <label>感受<textarea v-model="reflectionEdit.text" rows="4" maxlength="5000" /></label>
@@ -516,6 +633,84 @@ onMounted(load);
               <button class="button button-primary" type="submit" :disabled="saving">保存修订</button>
             </div>
           </form>
+
+          <section v-if="revisionPanel(reflection.id)" class="revision-panel">
+            <p v-if="revisionPanel(reflection.id)!.loading" class="muted">正在读取修订历史…</p>
+            <template v-else>
+              <div class="revision-compare-controls">
+                <label>
+                  旧版
+                  <select v-model.number="revisionPanel(reflection.id)!.fromRevision">
+                    <option v-for="revision in revisionPanel(reflection.id)!.items" :key="revision.id" :value="revision.revisionNumber">
+                      第 {{ revision.revisionNumber }} 版
+                    </option>
+                  </select>
+                </label>
+                <span aria-hidden="true">→</span>
+                <label>
+                  新版
+                  <select v-model.number="revisionPanel(reflection.id)!.toRevision">
+                    <option v-for="revision in revisionPanel(reflection.id)!.items" :key="revision.id" :value="revision.revisionNumber">
+                      第 {{ revision.revisionNumber }} 版
+                    </option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="revision-compare">
+                <p class="muted">情绪标签变化</p>
+                <p class="mood-diff-line">
+                  <span v-for="tag in compareMoodDiff(revisionPanel(reflection.id)!).removed" :key="`r-${tag}`" class="diff-chip removed">
+                    − {{ MOOD_LABELS[tag] }}
+                  </span>
+                  <span v-for="tag in compareMoodDiff(revisionPanel(reflection.id)!).added" :key="`a-${tag}`" class="diff-chip added">
+                    + {{ MOOD_LABELS[tag] }}
+                  </span>
+                  <span
+                    v-if="
+                      compareMoodDiff(revisionPanel(reflection.id)!).added.length === 0 &&
+                        compareMoodDiff(revisionPanel(reflection.id)!).removed.length === 0
+                    "
+                    class="muted"
+                  >情绪标签没有变化</span>
+                </p>
+                <div class="diff-lines">
+                  <p
+                    v-for="(row, index) in compareTextRows(revisionPanel(reflection.id)!)"
+                    :key="index"
+                    class="diff-line"
+                    :class="`diff-${row.type}`"
+                  >
+                    <span class="diff-mark" aria-hidden="true">{{ row.type === 'added' ? '+' : row.type === 'removed' ? '−' : ' ' }}</span>
+                    <span class="preserve-text diff-line-text">{{ row.text }}</span>
+                  </p>
+                </div>
+              </div>
+
+              <ul class="revision-list">
+                <li v-for="revision in revisionPanel(reflection.id)!.items" :key="revision.id" class="revision-item">
+                  <div>
+                    <strong>{{ revisionLabel(revision) }}</strong>
+                    <time class="muted" :datetime="revision.createdAt">{{ formatDateTime(revision.createdAt) }}</time>
+                    <div class="mood-list">
+                      <span v-for="tag in revision.moodTags" :key="tag" class="mood-chip selected">{{ MOOD_LABELS[tag] }}</span>
+                    </div>
+                    <p class="preserve-text">{{ revision.text || '该版本没有写下文字。' }}</p>
+                  </div>
+                  <button
+                    v-if="canRestoreRevision(reflection, revision)"
+                    class="text-button"
+                    type="button"
+                    :disabled="saving"
+                    @click="restoreRevision(reflection, revision.revisionNumber)"
+                  >
+                    恢复为此版本
+                  </button>
+                  <span v-else-if="!canEditReflection(reflection)" class="muted">过期只读</span>
+                </li>
+              </ul>
+            </template>
+          </section>
         </article>
         <p v-if="reflections.length === 0" class="empty-inline">还没有读完后留下的感受。</p>
       </div>

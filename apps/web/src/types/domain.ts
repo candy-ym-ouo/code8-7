@@ -82,6 +82,19 @@ export interface Reflection {
   updatedAt: string;
 }
 
+export type ReflectionRevisionKind = 'INITIAL' | 'UPDATED' | 'RESTORED_HISTORY';
+
+export interface ReflectionRevision {
+  id: string;
+  revisionNumber: number;
+  kind: ReflectionRevisionKind;
+  moodTags: MoodTag[];
+  text: string;
+  version: number;
+  restoredFromRevision: number | null;
+  createdAt: string;
+}
+
 export interface TimelineEvent {
   id: string;
   bookId: string | null;
@@ -131,7 +144,14 @@ export const ACTION_LABELS: Record<ActivityAction, string> = {
   DELETED: '删除',
   RESTORED: '恢复',
   STATUS_CHANGED: '状态变化',
-  COMPLETED: '读完'
+  COMPLETED: '读完',
+  REVISION_RESTORED: '恢复历史修订'
+};
+
+export const REVISION_KIND_LABELS: Record<ReflectionRevisionKind, string> = {
+  INITIAL: '初版',
+  UPDATED: '修订',
+  RESTORED_HISTORY: '恢复自历史版本'
 };
 
 export const ENTITY_LABELS: Record<ActivityEntityType, string> = {

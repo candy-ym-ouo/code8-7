@@ -7,6 +7,7 @@ import type {
   MoodTag,
   Pagination,
   Reflection,
+  ReflectionRevision,
   RereadMark,
   TimelineEvent,
   Trace,
@@ -74,10 +75,16 @@ export const traceApi = {
 };
 
 export const reflectionApi = {
-  update: (id: string, body: { moodTags: MoodTag[]; text: string; version: number }) =>
+  update: (id: string, body: { moodTags?: MoodTag[]; text?: string; version: number }) =>
     api.patch<{ reflection: Reflection }>(`/reflections/${id}`, body),
   delete: (id: string, version: number) => api.delete<void>(`/reflections/${id}`, { version }),
-  restore: (id: string) => api.post<{ reflection: Reflection }>(`/reflections/${id}/restore`)
+  restore: (id: string) => api.post<{ reflection: Reflection }>(`/reflections/${id}/restore`),
+  revisions: (id: string) =>
+    api.get<{ items: ReflectionRevision[]; editableUntil: string; currentVersion: number }>(
+      `/reflections/${id}/revisions`
+    ),
+  restoreRevision: (id: string, body: { revisionNumber: number; version: number }) =>
+    api.post<{ reflection: Reflection }>(`/reflections/${id}/revisions/restore`, body)
 };
 
 export const timelineApi = {

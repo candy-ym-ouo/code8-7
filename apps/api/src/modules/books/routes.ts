@@ -5,7 +5,7 @@ import { BOOK_STATUSES, MOOD_TAGS, type BookStatus, type MoodTag } from '@paper-
 import { prisma } from '../../lib/prisma.js';
 import { AppError, zodFields } from '../../lib/errors.js';
 import { currentUser, requireAuth } from '../../lib/auth.js';
-import { normalizeMoodTags, normalizeText, validateStatusTransition } from '../../lib/domain.js';
+import { normalizeMoodTags, normalizeText, reflectionEditWindow, validateStatusTransition } from '../../lib/domain.js';
 import { writeEvent } from '../../lib/events.js';
 import { paginationFromQuery, parseId } from '../../lib/http.js';
 
@@ -401,8 +401,20 @@ export const bookRoutes: FastifyPluginAsync = async (app) => {
             moodTags,
             reflection: parsed.data.reflection.text ? normalizeText(parsed.data.reflection.text) : null,
             completedAt,
-            editableUntil: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+            editableUntil: reflectionEditWindow(now),
             createdAt: now
+          }
+        });
+        await tx.completionReflectionRevision.create({
+          data: {
+            userId,
+            reflectionId: reflection.id,
+            bookId,
+            revisionNumber: 1,
+            kind: 'INITIAL',
+            moodTags: reflection.moodTags,
+            reflection: reflection.reflection,
+            version: reflection.version
           }
         });
         const updated = await tx.book.update({
